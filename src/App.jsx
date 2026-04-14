@@ -1,33 +1,26 @@
 import React, { useState, useEffect } from 'react';
+import axios from 'axios';
 import { Dialog } from '@headlessui/react';
-import { UsersIcon, MapPinIcon, CalendarIcon, ViewColumnsIcon, XMarkIcon, ClockIcon, UserCircleIcon, CheckCircleIcon, CalendarDaysIcon } from '@heroicons/react/24/outline';
+import { UsersIcon, MapPinIcon, CalendarIcon, ViewColumnsIcon, XMarkIcon, ClockIcon, UserCircleIcon, CheckCircleIcon, CalendarDaysIcon, ServerStackIcon } from '@heroicons/react/24/outline';
 import { SparklesIcon } from '@heroicons/react/24/solid';
 
 const SEATS_TOTAL = 50;
 const FLOATER_SEATS = 10;
 const CAPACITY_BATCH = 40;
+const API_URL = 'http://localhost:5001/api';
 
 export default function App() {
   // --- Environment Mocks (SIMULATOR) ---
-  const [currentUserBatch, setCurrentUserBatch] = useState('batch2'); // The user using the app
-  const [currentTime, setCurrentTime] = useState('before3pm'); // 'before3pm' | 'after3pm'
-  const [currentWeek, setCurrentWeek] = useState('week1'); // 'week1' | 'week2'
-  const [currentDay, setCurrentDay] = useState('Mon'); // 'Mon' | 'Tue' | 'Wed' | 'Thu' | 'Fri'
+  const [currentUserBatch, setCurrentUserBatch] = useState('batch2'); 
+  const [currentTime, setCurrentTime] = useState('before3pm'); 
+  const [currentWeek, setCurrentWeek] = useState('week1'); 
+  const [currentDay, setCurrentDay] = useState('Mon'); 
 
   // --- Derived State Engine ---
-  // Week 1: Mon-Wed -> Batch 1 | Thu-Fri -> Batch 2
-  // Week 2: Mon-Wed -> Batch 2 | Thu-Fri -> Batch 1
   const getActiveBatchAndRules = () => {
     const isEarlyWeek = ['Mon', 'Tue', 'Wed'].includes(currentDay);
-    let active = 'batch1';
-    
-    if (currentWeek === 'week1') {
-      active = isEarlyWeek ? 'batch1' : 'batch2';
-    } else {
-      active = isEarlyWeek ? 'batch2' : 'batch1';
-    }
-    
-    return active;
+    if (currentWeek === 'week1') return isEarlyWeek ? 'batch1' : 'batch2';
+    return isEarlyWeek ? 'batch2' : 'batch1';
   };
 
   const activeBatch = getActiveBatchAndRules();
@@ -37,30 +30,59 @@ export default function App() {
   const [selectedSeat, setSelectedSeat] = useState(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [modalMode, setModalMode] = useState('book'); // 'book' | 'cancel'
+  const [loading, setLoading] = useState(true);
+  const [seats, setSeats] = useState([]);
 
-  const [seats, setSeats] = useState(
-    Array.from({ length: SEATS_TOTAL }, (_, index) => {
-      const isFloater = index >= CAPACITY_BATCH;
-      const isBooked = !isFloater && Math.random() > 0.6; 
+  // Fetch true bookings from your SQLite Database
+  const fetchBookings = async () => {
+    try {
+      setLoading(true);
+      const response = await axios.get(`${API_URL}/bookings`, {
+        params: { week: currentWeek, day: currentDay }
+      });
       
-      return {
-        id: index + 1,
-        isFloater,
-        isBooked,
-        bookedByCurrentUser: false 
-      };
-    })
-  );
+      const dbBookings = response.data;
 
-  // Clear "Your Bookings" if the day or week changes, simulating a new day
+      // Construct visual seats
+      const derivedSeats = Array.from({ length: SEATS_TOTAL }, (_, index) => {
+        const deskId = index + 1;
+        const isFloater = index >= CAPACITY_BATCH;
+        
+        // Check if there is an active booking entry for this desk today
+        const bookingForSeat = dbBookings.find(b => b.seatId === deskId);
+        
+        return {
+          id: deskId,
+          isFloater,
+          isBooked: !!bookingForSeat,
+          bookedByCurrentUser: bookingForSeat ? bookingForSeat.userBatch === currentUserBatch : false 
+        };
+      });
+      
+      setSeats(derivedSeats);
+    } catch (error) {
+      console.error("Failed to fetch bookings. Is the server running?", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Re-pull database whenever user flips calendar simulation or changes roles!
   useEffect(() => {
-    setSeats((prev) => 
-      prev.map(s => s.bookedByCurrentUser ? { ...s, isBooked: false, bookedByCurrentUser: false } : s)
-    );
-  }, [currentDay, currentWeek]);
+    fetchBookings();
+  }, [currentDay, currentWeek, currentUserBatch]);
+
+  const handleInitDB = async () => {
+    try {
+      const res = await axios.post(`${API_URL}/init-desks`);
+      alert(res.data.message || "Database structural seats initialized!");
+    } catch (err) {
+      alert(err.response?.data?.error || "Already initialized or server down.");
+    }
+  };
 
   const handleSeatClick = (seat) => {
-    // 1. Cancel own seat
+    // Cancel own seat
     if (seat.bookedByCurrentUser) {
       setSelectedSeat(seat);
       setModalMode('cancel');
@@ -68,10 +90,10 @@ export default function App() {
       return;
     }
 
-    // 2. Prevent clicking seats booked by OTHERS
+    // Prevent clicking seats booked by OTHERS
     if (seat.isBooked) return;
 
-    // 3. Business logic for booking available seats!
+    // Rules logic
     if (!seat.isFloater) {
       if (!isUserOnDay && currentTime === 'before3pm') {
         alert("Before 3:00 PM, regular seats are reserved tightly for the allocated batch.\n\nSince you are off-batch today, you can only book a Floater seat right now.\n(Switch simulator to 'After 3:00 PM' to test releasing the seats!)");
@@ -84,17 +106,35 @@ export default function App() {
     setIsModalOpen(true);
   };
 
-  const processAction = () => {
+  const processAction = async () => {
     if (!selectedSeat) return;
     
-    if (modalMode === 'book') {
-      setSeats((prev) =>
-        prev.map((s) => (s.id === selectedSeat.id ? { ...s, isBooked: true, bookedByCurrentUser: true } : s))
-      );
-    } else {
-      setSeats((prev) =>
-        prev.map((s) => (s.id === selectedSeat.id ? { ...s, isBooked: false, bookedByCurrentUser: false } : s))
-      );
+    try {
+      if (modalMode === 'book') {
+        // Send actual POST to Database
+        await axios.post(`${API_URL}/bookings`, {
+          deskId: selectedSeat.id,
+          userBatch: currentUserBatch,
+          week: currentWeek,
+          day: currentDay
+        });
+      } else {
+        // Send actual DELETE to Database
+        await axios.delete(`${API_URL}/bookings`, {
+          data: {
+             deskId: selectedSeat.id,
+             userBatch: currentUserBatch,
+             week: currentWeek,
+             day: currentDay
+          }
+        });
+      }
+      
+      // Auto-refresh the visual UI grid gracefully after backend responds
+      fetchBookings();
+    } catch (error) {
+      // Typically fires if unique constraint prevents double booking!
+      alert(error.response?.data?.error || "A database constraint occurred.");
     }
     
     setIsModalOpen(false);
@@ -102,8 +142,10 @@ export default function App() {
   };
 
   const renderSeats = () => {
+    if (loading && seats.length === 0) return <div className="text-zinc-400 font-bold p-8 text-center animate-pulse w-full">Connecting to Database API...</div>;
+
     return seats.map((seat) => {
-      let statusColor = "bg-zinc-200 text-zinc-400 border-zinc-300"; // default available
+      let statusColor = "bg-zinc-200 text-zinc-400 border-zinc-300"; 
       
       const isLockedOut = !seat.isFloater && !isUserOnDay && currentTime === 'before3pm' && !seat.isBooked;
 
@@ -149,9 +191,15 @@ export default function App() {
           <div className="bg-brand-600 p-2 rounded-xl shadow-lg shadow-brand-500/30">
             <MapPinIcon className="h-6 w-6 text-white" />
           </div>
-          <h1 className="text-xl font-bold tracking-tight text-dark-900">DeskSync <span className="text-zinc-400 font-light ml-1">Live</span></h1>
+          <h1 className="text-xl font-bold tracking-tight text-dark-900">DeskSync <span className="text-zinc-400 font-light ml-1">Live DB</span></h1>
         </div>
         <div className="flex items-center gap-4">
+          <button 
+            onClick={handleInitDB}
+            className="flex items-center gap-2 text-xs font-bold bg-dark-900 text-white px-3 py-1.5 rounded-lg hover:bg-zinc-700"
+          >
+            <ServerStackIcon className="w-4 h-4" /> Initialize Core Seats
+          </button>
           <div className="hidden md:flex items-center gap-2 text-sm font-medium bg-zinc-100 px-4 py-2 rounded-full text-zinc-600 border border-zinc-200">
             <UserCircleIcon className="h-5 w-5 text-brand-600" />
             <span>Logged in as: <strong className="text-dark-900 ml-1">{currentUserBatch.toUpperCase()} User</strong></span>
@@ -173,8 +221,6 @@ export default function App() {
             </div>
             
             <div className="flex flex-wrap gap-4 items-center">
-               
-               {/* Week Toggle */}
                <div className="bg-white/10 p-1.5 rounded-xl border border-white/10 backdrop-blur-md flex gap-1">
                   <button onClick={() => setCurrentWeek('week1')} className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${currentWeek === 'week1' ? 'bg-indigo-500 text-white shadow' : 'text-indigo-200 hover:bg-white/10'}`}>
                     Week 1
@@ -184,7 +230,6 @@ export default function App() {
                   </button>
                </div>
 
-               {/* Day Toggle */}
                <div className="bg-white/10 p-1.5 rounded-xl border border-white/10 backdrop-blur-md flex gap-1">
                   {daysOfWeek.map(day => (
                     <button 
@@ -197,7 +242,6 @@ export default function App() {
                   ))}
                </div>
                
-               {/* Time Toggle */}
                <div className="bg-white/10 p-1.5 rounded-xl border border-white/10 backdrop-blur-md flex gap-1">
                   <button onClick={() => setCurrentTime('before3pm')} className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${currentTime === 'before3pm' ? 'bg-white text-indigo-900 shadow' : 'text-indigo-200 hover:bg-white/10'}`}>
                     Before 3 PM
@@ -207,7 +251,6 @@ export default function App() {
                   </button>
                </div>
 
-               {/* Role Toggle */}
                <div className="bg-white/10 p-1.5 rounded-xl border border-white/10 backdrop-blur-md flex gap-1 w-full md:w-auto mt-2 md:mt-0">
                   <span className="text-xs text-indigo-300 self-center px-2 mr-1 uppercase font-bold tracking-wider">I am: </span>
                   <button onClick={() => setCurrentUserBatch('batch1')} className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${currentUserBatch === 'batch1' ? 'bg-white text-indigo-900 shadow' : 'text-indigo-200 hover:bg-white/10'}`}>
@@ -220,7 +263,6 @@ export default function App() {
             </div>
           </div>
         </div>
-        {/* --- END SIMULATOR --- */}
 
         {/* Header Section */}
         <div className="mb-8 flex flex-col md:flex-row justify-between items-center gap-6 bg-white p-6 rounded-2xl border border-zinc-200 shadow-sm">
@@ -250,7 +292,7 @@ export default function App() {
         {/* Floor Plan Visualization */}
         <div className="bg-white rounded-[2rem] p-8 border border-zinc-200 shadow-sm">
           <div className="flex flex-col md:flex-row justify-between items-center mb-8 border-b border-zinc-100 pb-4 gap-4">
-            <h3 className="text-xl font-bold text-dark-900">Interactive Floor Plan</h3>
+            <h3 className="text-xl font-bold text-dark-900">Interactive DB Floor Plan</h3>
             <div className="flex flex-wrap gap-4 text-xs font-medium bg-zinc-50 py-2 px-4 rounded-full border border-zinc-200">
                <div className="flex items-center gap-1.5">
                  <div className="w-3 h-3 rounded-full bg-brand-700 shadow-sm shadow-brand-500/50"></div>
@@ -324,7 +366,7 @@ export default function App() {
                    <span className="text-xs font-bold text-amber-600 bg-amber-50 px-2 flex py-0.5 rounded text-right">Early Cancellation</span>
                 ) : (
                   <span className="text-xs font-bold text-brand-600 bg-brand-50 px-2 py-0.5 rounded text-right flex items-center gap-1">
-                     <CheckCircleIcon className="w-4 h-4" /> Allowed by Engine
+                     <CheckCircleIcon className="w-4 h-4" /> Allowed by DB
                   </span>
                 )}
               </div>

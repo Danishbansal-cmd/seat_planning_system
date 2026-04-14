@@ -1,0 +1,31 @@
+generator client {
+  provider = "prisma-client-js"
+  engineType = "library"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+// Representing the physical seats in the office
+model Seat {
+  id        Int       @id @default(autoincrement())
+  deskId    Int       @unique
+  isFloater Boolean   @default(false)
+  bookings  Booking[]
+}
+
+// Representing a booking instance for a specific day and week.
+model Booking {
+  id        Int      @id @default(autoincrement())
+  seatId    Int
+  seat      Seat     @relation(fields: [seatId], references: [deskId])
+  userBatch String   // e.g., "batch1" or "batch2"
+  week      String   // e.g., "week1"
+  day       String   // e.g., "Mon"
+  
+  createdAt DateTime @default(now())
+
+  // Ensure that a specific seat is only booked once on any given day!
+  @@unique([seatId, week, day])
+}
