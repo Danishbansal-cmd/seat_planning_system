@@ -88,4 +88,18 @@ app.delete('/api/bookings', async (req, res) => {
   }
 });
 
+// --- 5. RESET ALL BOOKINGS FOR A DAY ---
+app.delete('/api/bookings/reset', async (req, res) => {
+  const { week, day } = req.body;
+  
+  try {
+    const deleted = await prisma.booking.deleteMany({
+      where: { week, day }
+    });
+    res.json({ message: `Successfully reset ${deleted.count} bookings for ${day} (${week})` });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.listen(PORT, () => console.log(`Seat Booking DB API running on http://localhost:${PORT}`));
